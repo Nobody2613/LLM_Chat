@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  html, body { margin: 0; padding: 8px; background: transparent; }
+  body { display: flex; justify-content: center; }
+  #graph svg { max-width: 100%; height: auto; }
+</style>
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<div id="graph"></div>
+<script>
+  // 由 Flutter 调用：runMermaid(id, source, isDark, rasterize)。
+  // 1) 渲染 SVG，上报内联容器高度（mermaidSize 通道）
+  // 2) rasterize=true 时（内联场景）：把 svg 以自然尺寸 2x 光栅化为 PNG
+  //    回传（mermaidPng 通道）——Flutter 侧用原生 Image 替换 WebView，
+  //    列表滚动不再携带 WebView；失败/超大则继续用 WebView 展示
+  // 3) rasterize=false（全屏回退场景）：只渲染
+  function post(name, obj) {
+    try {
+      window[name].postMessage(typeof obj === 'string' ? obj : JSON.stringify(obj));
+    } catch (e) {
+      console.error('POST_FAIL ' + name + ': ' + e);
+    }
+  }
+  function runMermaid(id, source, isDark, rasterize) {
+    try {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: isDark ? 'dark' : 'default',
+        securityLevel: 'loose',
+        fontFamily: 'sans-serif',
+        // htmlLabels 输出 <foreignObject>，无法经 <img> → canvas 光栅化；
+        // useMaxWidth 关闭后 SVG 带显式像素宽，测量/序列化正确
+        flowchart: { htmlLabels: false, useMaxWidth: false },
+        sequence: { useMaxWidth: false },
+        gantt: { useMaxWidth: false },
+        class: { htmlLabels: false, useMaxWidth: false },
+        state: { useMaxWidth: false },
+        er: { useMaxWidth: false },
+        pie: { useMaxWidth: false },
+        journey: { useMaxWidth: false },
+        mindmap: { useMaxWidth: false },
+        timeline: { useMaxWidth: false },
+        sankey: { useMaxWidth: false },
+        xychart: { useMaxWidth: false },
+        block: { useMaxWidth: false },
+      });
+      const el = document.getElementById('graph');
+      el.innerHTML = '';
+      mermaid.render('m' + id, source).then(({ svg }) => {
+        el.innerHTML = svg;
+        const sv = el.querySelector('svg');
+        if (!sv) return post('mermaidPng', { id: id, error: 'no svg' });
+        sv.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        // 自然尺寸：临时解除 CSS 宽度限制后测量
+        sv.style.maxWidth = 'none';
+        const r = sv.getBoundingClientRect();
+        const vb = (sv.getAttribute('viewBox') || '').trim().split(/\s+/);
+        let w = Math.ceil(r.width), h = Math.ceil(r.height);
+        if ((w < 2 || h < 2) && vb.length === 4) {
+          if (w < 2) w = Math.ceil(parseFloat(vb[2]));
+          if (h < 2) h = Math.ceil(parseFloat(vb[3]));
+        }
+        w = Math.max(1, w); h = Math.max(1, h);
+        sv.setAttribute('width', w);
+        sv.setAttribute('height', h);
+        // 内联容器高度：按显示宽度等比折算（CSS max-width:100%）
+        const cw = document.documentElement.clientWidth;
+        const dispH = Math.ceil(h * Math.min(1, cw / w)) + 16;
+        post('mermaidSize', String(Math.max(60, dispH)));
+        // 恢复内联显示缩放（CSS max-width 接管）
+        sv.style.maxWidth = '';
+        if (!rasterize) return;
+        console.log('RASTER start w=' + w + ' h=' + h);
+        const xml = new XMLSerializer().serializeToString(sv);
+        const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const s = 2;
+            const c = document.createElement('canvas');
+            c.width = Math.min(8192, Math.ceil(w * s));
+            c.height = Math.min(8192, Math.ceil(h * s));
+            const ctx = c.getContext('2d');
+            ctx.setTransform(c.width / w, 0, 0, c.height / h, 0, 0);
+            ctx.drawImage(img, 0, 0);
+            const png = c.toDataURL('image/png');
+            console.log('RASTER png len=' + png.length);
+            if (png.length > 6000000) return post('mermaidPng', { id: id, skip: true });
+            post('mermaidPng', { id: id, png: png, w: w, h: h });
+          } catch (e) {
+            console.error('RASTER canvas: ' + (e && e.message || e));
+            post('mermaidPng', { id: id, error: String(e && e.message || e) });
+          }
+        };
+        img.onerror = () => {
+          console.error('RASTER img load failed');
+          post('mermaidPng', { id: id, error: 'raster error' });
+        };
+        img.src = url;
+      }).catch((e) => {
+        el.innerHTML = '<pre style="color:#c00;white-space:pre-wrap;">' +
+          String(e && e.message || e) + '</pre>';
+        post('mermaidSize', String(Math.max(60, el.scrollHeight + 16)));
+      });
+    } catch (e) {
+      document.getElementById('graph').innerHTML =
+        '<pre style="color:#c00;white-space:pre-wrap;">' + String(e) + '</pre>';
+    }
+  }
+</script>
+</body>
+</html>
