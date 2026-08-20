@@ -949,10 +949,19 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Future<String> _webSearch(String query) async {
     final q = query.trim();
     if (q.isEmpty) return '搜索失败：查询词为空';
-    final provider = _providerFor(_currentKey);
-    if (provider == null || provider.apiKey.isEmpty) {
-      return '搜索失败：当前模型提供方未配置 API Key';
+    // 搜索绑死 DeepSeek 服务商：key 固定取 DeepSeek 提供方（预置不可删），
+    // 与当前聊天模型所属提供方解耦——Kimi/Qwen/GLM 聊天时搜索照样可用
+    ModelProvider? dsProvider;
+    for (final p in _providers) {
+      if (p.name == 'DeepSeek') {
+        dsProvider = p;
+        break;
+      }
     }
+    if (dsProvider == null || dsProvider.apiKey.isEmpty) {
+      return '搜索失败：未配置 DeepSeek 服务商的 API Key（设置→模型提供方→DeepSeek）';
+    }
+    final apiKey = dsProvider.apiKey;
     // DeepSeek 搜索专用端点（Anthropic 格式，与聊天端点不同）
     const endpoint = 'https://api.deepseek.com/anthropic/v1/messages';
     try {
@@ -960,8 +969,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           .post(
             Uri.parse(endpoint),
             headers: {
-              'x-api-key': provider.apiKey,
-              'authorization': 'Bearer ${provider.apiKey}',
+              'x-api-key': apiKey,
+              'authorization': 'Bearer $apiKey',
               'anthropic-version': '2023-06-01',
               'content-type': 'application/json',
               'accept': 'application/json',
